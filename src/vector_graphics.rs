@@ -12,24 +12,14 @@ enum Mode{
     Edit,
 }
 
-enum ObjectType{
-    Player,
-    Block,
-}
-
-struct Object{
+struct Rect{
     x:f32,
     y:f32,
     width:f32,
-    height:f32,
-    object_type:ObjectType,
-    velocity_x:f32,
-    velocity_y:f32,
-    grounded:bool,
+    height:f32,    
 }
 
-
-impl Object{
+impl Rect{
     fn contains(&self, point:[f32;2]) -> bool{
         point[0] > self.x && point[1] > self.y && point[0] < self.x+self.width && point[1] < self.y+self.height
     }
@@ -38,7 +28,7 @@ impl Object{
         [self.x+self.width/2.0, self.y+self.height/2.0]
     }
 
-    fn overlaps(a:&Object, b:&Object) -> bool{
+    fn overlaps(a:&Rect, b:&Rect) -> bool{
         let center_a = a.center();
         let center_b = b.center();
         let center_dist_x = (center_a[0] - center_b[0]).abs();
@@ -49,8 +39,18 @@ impl Object{
     }
 }
 
+struct Player{
+    active:bool,
+    rect:Rect,
+    velocity_x:f32,
+    velocity_y:f32,
+    grounded:bool,
+}
+
+
 pub struct VectorGraphics {
-    objects:Vec<Object>,
+    blocks:Vec<Rect>,
+    player:Player,
     drag:Drag,
     mouse_position:[f32;2],
     mode:Mode,
@@ -79,9 +79,9 @@ impl VectorGraphics {
         (result_x, result_y, result_w, result_h)
     }
 
-    fn find_object_at_point(&self, point:[f32;2]) -> Option<usize>{
-        for i in 0..self.objects.len(){
-            if self.objects[i].contains(point){
+    fn find_block_at_point(&self, point:[f32;2]) -> Option<usize>{
+        for i in 0..self.blocks.len(){
+            if self.blocks[i].contains(point){
                 return Some(i);
             }
         }
@@ -90,7 +90,14 @@ impl VectorGraphics {
 
     pub fn new() -> VectorGraphics{
         return VectorGraphics { 
-            objects:Vec::new(), 
+            blocks:Vec::new(), 
+            player:Player { 
+                active: false, 
+                rect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }, 
+                velocity_x: 0.0, 
+                velocity_y: 0.0, 
+                grounded: true 
+            },
             drag:Drag { dragging: false, x: 0.0, y: 0.0, x2: 0.0, y2: 0.0 }, 
             mouse_position:[0.0,0.0],
             mode:Mode::Edit,
@@ -130,8 +137,8 @@ impl VectorGraphics {
             Mode::Edit => {
                 match key{
                     winit::keyboard::KeyCode::Backspace=>{
-                        match self.find_object_at_point(self.mouse_position){
-                            Some(id) => {self.objects.remove(id);}
+                        match self.find_block_at_point(self.mouse_position){
+                            Some(id) => {self.blocks.remove(id);}
                             _ => {}
                         }
                     }
@@ -145,8 +152,14 @@ impl VectorGraphics {
                         }
                     }
                     winit::keyboard::KeyCode::KeyP=>{
-                        match self.find_object_at_point(self.mouse_position){
-                            Some(id) => {self.objects[id].object_type = ObjectType::Player}
+                        match self.find_block_at_point(self.mouse_position){
+                            Some(id) => {
+                                self.player.rect = self.blocks.remove(id);
+                                self.player.velocity_x = 0.0;
+                                self.player.velocity_y = 0.0;
+                                self.player.grounded = false;
+                                self.player.active = true;
+                            }
                             _ => {}
                         }
                     }
@@ -168,15 +181,11 @@ impl VectorGraphics {
                 if self.drag.dragging{
                     self.drag.dragging = false;
                     let abs_rect = Self::abs_rect(self.drag.x, self.drag.y, self.drag.x2 - self.drag.x, self.drag.y2 - self.drag.y);
-                    self.objects.push(Object {
+                    self.blocks.push(Rect {
                         x: abs_rect.0, 
                         y: abs_rect.1, 
                         width: abs_rect.2, 
                         height: abs_rect.3,
-                        object_type:ObjectType::Block,
-                        velocity_x: 0.0,
-                        velocity_y: 0.0,
-                        grounded:false,
                     });
                 }
             }
@@ -184,36 +193,31 @@ impl VectorGraphics {
         }
     }
 
-    fn overlaps_any_block(&self, object:&Object)->bool{
-        for o in &self.objects{
-            match o.object_type {
-                ObjectType::Block => {
-                    if Object::overlaps(object, o){
-                        return true;
-                    }
-                }
-                _=>{}
+    fn overlaps_any_block(&self, rect:&Rect)->bool{
+        for o in &self.blocks{
+            if Rect::overlaps(rect, o){
+                return true;
             }
         }
         return false;
     }
 
-    fn slide_x(&mut self, i:usize, distance:f32){
-        self.objects[i].x += distance;
-        if self.overlaps_any_block(&self.objects[i]) { 
-            self.objects[i].x -= distance;
-            self.objects[i].velocity_x = 0.0;
+    fn slide_x(&mut self, distance:f32){
+        self.player.rect.x += distance;
+        if self.overlaps_any_block(&self.player.rect) { 
+            self.player.rect.x -= distance;
+            self.player.velocity_x = 0.0;
         }
     }
 
-    fn slide_y(&mut self, i:usize, distance:f32){
-        self.objects[i].y += distance;
-        if self.overlaps_any_block(&self.objects[i]){
-            self.objects[i].y -= distance;
+    fn slide_y(&mut self, distance:f32){
+        self.player.rect.y += distance;
+        if self.overlaps_any_block(&self.player.rect){
+            self.player.rect.y -= distance;
             if distance>=0.0 {
-                self.objects[i].grounded = true;
+                self.player.grounded = true;
             }
-            self.objects[i].velocity_y = 0.0;
+           self.player.velocity_y = 0.0;
         }
     }
 
@@ -224,35 +228,29 @@ impl VectorGraphics {
         }
         match self.mode{
             Mode::Play => {
-                for i in 0..self.objects.len(){
-                    match self.objects[i].object_type{
-                        ObjectType::Block => {}
-                        ObjectType::Player => {
-                            self.objects[i].velocity_y += self.gravity;
-                            self.slide_x(i, self.objects[i].velocity_x);
-                            self.slide_y(i, self.objects[i].velocity_y);
-                            if self.left_arrow{
-                                self.slide_x(i, -self.player_speed);
-                            }
-                            if self.right_arrow{
-                                self.slide_x(i, self.player_speed);
-                            }
-                            if self.up_arrow && self.objects[i].grounded{
-                                self.objects[i].velocity_y -= self.jump_force;
-                            }
-                            self.objects[i].grounded = false;
-                        }
+                if self.player.active{
+                    self.player.velocity_y += self.gravity;
+                    self.slide_x(self.player.velocity_x);
+                    self.slide_y(self.player.velocity_y);
+                    if self.left_arrow{
+                        self.slide_x(-self.player_speed);
                     }
+                    if self.right_arrow{
+                        self.slide_x(self.player_speed);
+                    }
+                    if self.up_arrow && self.player.grounded{
+                        self.player.velocity_y -= self.jump_force;
+                    }
+                    self.player.grounded = false;
                 }
             }
             Mode::Edit => {}
         }
-        for object in &self.objects{
-            let (r,g,b) = match &object.object_type {
-                ObjectType::Block => (0.025,0.025,0.025),
-                ObjectType::Player => (1.0, 0.5, 0.0),
-            };
-            mesh.add_rect(object.x, object.y, object.width, object.height, r, g, b);
+        for block in &self.blocks{
+            mesh.add_rect(block.x, block.y, block.width, block.height, 0.025, 0.025, 0.025);
+        }
+        if self.player.active{
+            mesh.add_rect(self.player.rect.x, self.player.rect.y, self.player.rect.width, self.player.rect.height, 1.0, 0.5, 0.0);
         }
         mesh.update_queue(queue);
     }
