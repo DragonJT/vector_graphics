@@ -62,7 +62,7 @@ pub fn main() {
             winit::event::Event::WindowEvent { window_id:_window_id, event } => {
                 match event {
                     winit::event::WindowEvent::CursorMoved { device_id:_device_id, position } => {
-                        vector_graphics.mousemove([position.x as f32, position.y as f32]);
+                        vector_graphics.mousemove(vector_graphics::Vector2 { x: position.x as f32, y: position.y as f32 });
                     }
                     winit::event::WindowEvent::KeyboardInput { device_id:_device_id, event, is_synthetic:_is_synthetic } =>{
                         match event.physical_key{
@@ -84,6 +84,7 @@ pub fn main() {
                         config.width = new_size.width;
                         config.height = new_size.height;
                         surface.configure(&device, &config);
+                        vector_graphics.resize(new_size.width as f32, new_size.height as f32);
                         render_pipeline.resize(&queue, new_size.width as f32, new_size.height as f32);
                     }
                     winit::event::WindowEvent::CloseRequested => {
