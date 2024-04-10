@@ -1,3 +1,6 @@
+use serde::{Serialize, Deserialize};
+use std::fs::File;
+use std::io::prelude::*;
 
 struct Drag{
     dragging:bool,
@@ -7,6 +10,7 @@ struct Drag{
     y2:f32,
 }
 
+#[derive(Serialize, Deserialize)]
 enum CollisionType{
     Bounce,
     PortalTo(usize),
@@ -18,6 +22,7 @@ enum Mode{
     Edit,
 }
 
+#[derive(Serialize, Deserialize)]
 enum ObjectType{
     Player,
     Enemy,
@@ -26,6 +31,7 @@ enum ObjectType{
     PortalOut,
 }
 
+#[derive(Serialize, Deserialize)]
 struct Rect{
     x:f32,
     y:f32,
@@ -42,11 +48,6 @@ impl Rect{
         [self.x+self.width/2.0, self.y+self.height/2.0]
     }
 
-    fn set_center(&mut self, center:[f32;2]){
-        self.x = center[0] - self.width/2.0;
-        self.y = center[1] - self.height/2.0;
-    }
-
     fn overlaps(a:&Rect, b:&Rect) -> bool{
         let center_a = a.center();
         let center_b = b.center();
@@ -58,6 +59,7 @@ impl Rect{
     }
 }
 
+#[derive(Serialize, Deserialize)]
 struct Object{
     object_type:ObjectType,
     rect:Rect,
@@ -82,6 +84,19 @@ pub struct VectorGraphics {
 }
 
 impl VectorGraphics {
+
+    fn save(&self){
+        let serialized = serde_json::to_string(&self.objects).unwrap();
+        let mut file = File::create("save.txt").unwrap();
+        file.write_all(serialized.as_bytes()).unwrap();
+    }
+
+    fn load(&self) -> Vec<Object>{
+        let mut file = File::open("save.txt").unwrap();
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).unwrap();
+        serde_json::from_str(&contents).unwrap()
+    }
 
     fn is_playing(&self) -> bool{
         match self.mode {
@@ -213,6 +228,12 @@ impl VectorGraphics {
                     winit::keyboard::KeyCode::Escape=>{
                         self.mode = Mode::Play;
                     }
+                    winit::keyboard::KeyCode::KeyS=>{
+                        self.save();
+                    }
+                    winit::keyboard::KeyCode::KeyL=>{
+                        self.objects = self.load();
+                    }
                     _=>{}
                 }
             }
@@ -249,57 +270,72 @@ impl VectorGraphics {
         }
     }
 
-    fn overlaps_any_block(&self, object_id:usize)->Option<usize>{
+    fn overlaps(&self, object_id:usize)->Vec<usize>{
+        let mut result:Vec<usize> = Vec::new();
         for i in 0..self.objects.len(){
             if i!=object_id && Rect::overlaps(&self.objects[object_id].rect, &self.objects[i].rect){
-                return Some(i);
+                result.push(i);
             }
         }
-        return None;
+        result
+    }
+
+    fn portal_to(&mut self, id:usize, location:[f32;2]) -> bool{
+        let old_x = self.objects[id].rect.x;
+        let old_y = self.objects[id].rect.y;
+        self.objects[id].rect.x = location[0] - self.objects[id].rect.width/2.0;
+        self.objects[id].rect.y = location[1] - self.objects[id].rect.height/2.0;
+        for other_id in self.overlaps(id) {
+            match self.objects[other_id].collision_type {
+                CollisionType::Bounce => {
+                    self.objects[id].rect.x = old_x;
+                    self.objects[id].rect.y = old_y;
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        true
     }
 
     fn slide_x(&mut self, id:usize, distance:f32) -> bool{
         self.objects[id].rect.x += distance;
-        match self.overlaps_any_block(id) {
-            Some(other_id) => {
-                match self.objects[other_id].collision_type {
-                    CollisionType::Bounce => {
-                        self.objects[id].rect.x -= distance;
-                        self.objects[id].velocity_x = 0.0;
-                        return true;
-                    }
-                    CollisionType::PortalTo(location_id) => {
-                        let location = self.objects[location_id].rect.center();
-                        self.objects[id].rect.set_center(location);
+        for other_id in self.overlaps(id) {
+            match self.objects[other_id].collision_type {
+                CollisionType::Bounce => {
+                    self.objects[id].rect.x -= distance;
+                    self.objects[id].velocity_x = 0.0;
+                    return true;
+                }
+                CollisionType::PortalTo(location_id) => {
+                    let location = self.objects[location_id].rect.center();
+                    if self.portal_to(id, location){
                         return false;
                     }
-                    _ => return false,
                 }
-            } 
-            None => {}
+                _ => {},
+            }
         }
         false
     }
 
     fn slide_y(&mut self, id:usize, distance:f32) -> bool{
         self.objects[id].rect.y += distance;
-        match self.overlaps_any_block(id) {
-            Some(other_id) => {
-                match self.objects[other_id].collision_type {
-                    CollisionType::Bounce => {
-                        self.objects[id].rect.y -= distance;
-                        self.objects[id].velocity_y = 0.0;
-                        return true;
-                    }
-                    CollisionType::PortalTo(location_id) => {
-                        let location = self.objects[location_id].rect.center();
-                        self.objects[id].rect.set_center(location);
+        for other_id in self.overlaps(id) {
+            match self.objects[other_id].collision_type {
+                CollisionType::Bounce => {
+                    self.objects[id].rect.y -= distance;
+                    self.objects[id].velocity_y = 0.0;
+                    return true;
+                }
+                CollisionType::PortalTo(location_id) => {
+                    let location = self.objects[location_id].rect.center();
+                    if self.portal_to(id, location) {
                         return false;
                     }
-                    _ => return false,
                 }
+                _ => {},
             }
-            None => {}
         }
         false
     }
