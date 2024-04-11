@@ -13,8 +13,16 @@ struct Drag{
 #[derive(Serialize, Deserialize)]
 enum CollisionType{
     Bounce,
-    PortalTo(usize),
+    PortalTo,
     None,
+}
+
+#[derive(Serialize, Deserialize)]
+enum Controller{
+    None,
+    Player,
+    AI,
+    FollowTarget,
 }
 
 enum Mode{
@@ -22,14 +30,13 @@ enum Mode{
     Edit,
 }
 
-#[derive(Serialize, Deserialize)]
-enum ObjectType{
-    Player,
-    Enemy,
-    Block,
-    PortalIn,
-    PortalOut,
+#[derive(Serialize, Deserialize, Copy, Clone)]
+struct Color{
+    r:f32,
+    g:f32,
+    b:f32,
 }
+
 
 #[derive(Serialize, Deserialize, Copy, Clone)]
 pub struct Vector2{
@@ -46,6 +53,10 @@ struct Rect{
 }
 
 impl Rect{
+    fn expand(&self, radius:f32) -> Rect{
+        Rect { x: self.x-radius, y: self.y-radius, width: self.width+radius*2.0, height: self.height+radius*2.0 }
+    }
+
     fn contains(&self, point:Vector2) -> bool{
         point.x > self.x && point.y > self.y && point.x < self.x+self.width && point.y< self.y+self.height
     }
@@ -65,14 +76,27 @@ impl Rect{
     }
 }
 
+const FACTION_PLAYER:u32 = 1;
+const FACTION_ENEMY:u32 = 2;
+
 #[derive(Serialize, Deserialize)]
 struct Object{
-    object_type:ObjectType,
+    faction:u32,
+    controller:Controller,
     rect:Rect,
+    color:Color,
     velocity:Vector2,
     gravity:f32,
     ai_direction:f32,
     collision_type:CollisionType,
+    destroying:bool,
+    destroying_in_frames:u32,
+    frames_left_to_fire:u32,
+    target:usize,
+    health:i32,
+    max_health:i32,
+    damage:i32,
+    recently_damaged:u32,
 }
 
 pub struct VectorGraphics {
@@ -87,6 +111,7 @@ pub struct VectorGraphics {
     right_arrow:bool,
     down_arrow:bool,
     up_arrow:bool,
+    space:bool,
     last_portal_in:usize,
     cam:Vector2,
     screen:Vector2,
@@ -145,6 +170,7 @@ impl VectorGraphics {
             right_arrow:false,
             up_arrow:false,
             down_arrow:false,
+            space:false,
             last_portal_in:0,
             cam:Vector2{x:0.0, y:0.0},
             screen:Vector2{x:0.0, y:0.0},
@@ -175,6 +201,7 @@ impl VectorGraphics {
             winit::keyboard::KeyCode::ArrowRight=>{ self.right_arrow = true } 
             winit::keyboard::KeyCode::ArrowUp=>{ self.up_arrow = true }
             winit::keyboard::KeyCode::ArrowDown=>{ self.down_arrow = true }
+            winit::keyboard::KeyCode::Space=>{ self.space = true }
             _ => {}
         }
         match  self.mode {
@@ -190,7 +217,10 @@ impl VectorGraphics {
                 match key{
                     winit::keyboard::KeyCode::Backspace=>{
                         match self.find_object_at_point(self.get_relative_mouse_position()){
-                            Some(id) => {self.objects.remove(id);}
+                            Some(id) => {
+                                self.objects[id].destroying = true;
+                                self.objects[id].destroying_in_frames = 0;
+                            }
                             _ => {}
                         }
                     }
@@ -207,7 +237,9 @@ impl VectorGraphics {
                     winit::keyboard::KeyCode::KeyP=>{
                         match self.find_object_at_point(self.get_relative_mouse_position()){
                             Some(id) => {
-                                self.objects[id].object_type = ObjectType::Player;
+                                self.objects[id].faction = FACTION_PLAYER;
+                                self.objects[id].controller = Controller::Player;
+                                self.objects[id].color = Color { r:1.0, g:0.5, b:0.0 };
                                 self.objects[id].gravity = 0.3;
                             }
                             _ => {}
@@ -216,9 +248,13 @@ impl VectorGraphics {
                     winit::keyboard::KeyCode::KeyE=>{
                         match self.find_object_at_point(self.get_relative_mouse_position()){
                             Some(id) => {
-                                self.objects[id].object_type = ObjectType::Enemy;
+                                self.objects[id].faction = FACTION_ENEMY;
+                                self.objects[id].controller = Controller::AI;
+                                self.objects[id].color = Color { r:1.0, g:0.0, b:0.0 };
                                 self.objects[id].gravity = 0.3;
                                 self.objects[id].ai_direction = -1.0;
+                                self.objects[id].health = 20;
+                                self.objects[id].max_health = 20;
                             }
                             _ => {}
                         }
@@ -226,7 +262,7 @@ impl VectorGraphics {
                     winit::keyboard::KeyCode::KeyI=>{
                         match self.find_object_at_point(self.get_relative_mouse_position()){
                             Some(id) => {
-                                self.objects[id].object_type = ObjectType::PortalIn;
+                                self.objects[id].color = Color{r:0.2, g:1.0, b:0.2};
                                 self.objects[id].collision_type = CollisionType::None;
                                 self.last_portal_in = id;
                             }
@@ -236,9 +272,10 @@ impl VectorGraphics {
                     winit::keyboard::KeyCode::KeyO => {
                         match self.find_object_at_point(self.get_relative_mouse_position()){
                             Some(id) => {
-                                self.objects[id].object_type = ObjectType::PortalOut;
+                                self.objects[id].color = Color{r:0.2, g:0.2, b:1.0};
                                 self.objects[id].collision_type = CollisionType::None;
-                                self.objects[self.last_portal_in].collision_type = CollisionType::PortalTo(id);
+                                self.objects[self.last_portal_in].collision_type = CollisionType::PortalTo;
+                                self.objects[self.last_portal_in].target = id;
                             }
                             _ => {}
                         }
@@ -264,6 +301,7 @@ impl VectorGraphics {
             winit::keyboard::KeyCode::ArrowRight=>{ self.right_arrow = false } 
             winit::keyboard::KeyCode::ArrowUp=>{ self.up_arrow = false }
             winit::keyboard::KeyCode::ArrowDown=>{ self.down_arrow = false }
+            winit::keyboard::KeyCode::Space=>{ self.space = false }
             winit::keyboard::KeyCode::KeyR=>{
                 if self.drag.dragging{
                     self.drag.dragging = false;
@@ -275,12 +313,22 @@ impl VectorGraphics {
                         height: abs_rect.3,
                     };
                     self.objects.push(Object { 
-                        object_type: ObjectType::Block, 
+                        controller: Controller::None,
                         rect: rect, 
+                        color: Color { r: 0.025, g: 0.025, b: 0.025 },
                         gravity: 0.0,
                         velocity: Vector2{x:0.0, y:0.0}, 
                         ai_direction: 0.0,
                         collision_type: CollisionType::Bounce,
+                        destroying: false,
+                        destroying_in_frames: 0,
+                        frames_left_to_fire: 0,
+                        target:0,
+                        faction:FACTION_PLAYER,
+                        health:0,
+                        max_health:0,
+                        damage:0,
+                        recently_damaged:0,
                     });
                 }
             }
@@ -298,12 +346,31 @@ impl VectorGraphics {
         result
     }
 
+    fn apply_damage_to_id(&mut self, id:usize, other_id:usize){
+        if self.objects[id].faction != self.objects[other_id].faction && self.objects[id].max_health>0 && self.objects[other_id].damage != 0{
+            self.objects[id].health -= self.objects[other_id].damage;
+            self.objects[other_id].damage = 0;
+            self.objects[id].recently_damaged = 120;
+            if self.objects[id].health <= 0{
+                self.objects[id].health = 0;
+                self.objects[id].destroying = true;
+                self.objects[id].destroying_in_frames = 0;
+            }
+        }
+    }
+
+    fn apply_damage(&mut self, id:usize, other_id:usize){
+        self.apply_damage_to_id(id, other_id);
+        self.apply_damage_to_id(other_id, id);
+    }
+
     fn portal_to(&mut self, id:usize, location:Vector2) -> bool{
         let old_x = self.objects[id].rect.x;
         let old_y = self.objects[id].rect.y;
         self.objects[id].rect.x = location.x - self.objects[id].rect.width/2.0;
         self.objects[id].rect.y = location.y - self.objects[id].rect.height/2.0;
         for other_id in self.overlaps(id) {
+            self.apply_damage(id, other_id);
             match self.objects[other_id].collision_type {
                 CollisionType::Bounce => {
                     self.objects[id].rect.x = old_x;
@@ -319,14 +386,15 @@ impl VectorGraphics {
     fn slide_x(&mut self, id:usize, distance:f32) -> bool{
         self.objects[id].rect.x += distance;
         for other_id in self.overlaps(id) {
+            self.apply_damage(id, other_id);
             match self.objects[other_id].collision_type {
                 CollisionType::Bounce => {
                     self.objects[id].rect.x -= distance;
                     self.objects[id].velocity.x = 0.0;
                     return true;
                 }
-                CollisionType::PortalTo(location_id) => {
-                    let location = self.objects[location_id].rect.center();
+                CollisionType::PortalTo => {
+                    let location = self.objects[self.objects[other_id].target].rect.center();
                     if self.portal_to(id, location){
                         return false;
                     }
@@ -340,14 +408,15 @@ impl VectorGraphics {
     fn slide_y(&mut self, id:usize, distance:f32) -> bool{
         self.objects[id].rect.y += distance;
         for other_id in self.overlaps(id) {
+            self.apply_damage(id, other_id);
             match self.objects[other_id].collision_type {
                 CollisionType::Bounce => {
                     self.objects[id].rect.y -= distance;
                     self.objects[id].velocity.y = 0.0;
                     return true;
                 }
-                CollisionType::PortalTo(location_id) => {
-                    let location = self.objects[location_id].rect.center();
+                CollisionType::PortalTo => {
+                    let location = self.objects[self.objects[other_id].target].rect.center();
                     if self.portal_to(id, location) {
                         return false;
                     }
@@ -374,22 +443,44 @@ impl VectorGraphics {
                     self.slide_x(i, self.objects[i].velocity.x);
                     let vy = self.objects[i].velocity.y;
                     let grounded = self.slide_y(i, vy) && vy >= 0.0;
-                    match self.objects[i].object_type {
-                        ObjectType::Player => {
+                    match self.objects[i].controller {
+                        Controller::Player => {
                             if self.left_arrow{
                                 self.slide_x(i, -self.speed);
                             }
                             if self.right_arrow{
                                 self.slide_x(i, self.speed);
                             }
-                            if self.up_arrow && grounded{
+                            if self.up_arrow && grounded{ 
                                 self.objects[i].velocity.y -= self.jump_force;
+                            }
+                            if self.space {
+                                if self.objects[i].frames_left_to_fire == 0{
+                                    self.objects[i].frames_left_to_fire = 30;
+                                    self.objects.push(Object { 
+                                        controller: Controller::FollowTarget, 
+                                        rect: self.objects[i].rect.expand(75.0), 
+                                        color: Color { r: 1.0, g: 1.0, b: 0.2 }, 
+                                        velocity: Vector2 { x: 0.0, y: 0.0 }, 
+                                        gravity: 0.0, 
+                                        ai_direction: 0.0, 
+                                        collision_type: CollisionType::None, 
+                                        destroying: true, destroying_in_frames: 20, 
+                                        frames_left_to_fire: 0,
+                                        target: i,
+                                        faction: self.objects[i].faction,
+                                        health: 0,
+                                        max_health: 0,
+                                        damage: 5,
+                                        recently_damaged:0,
+                                     });
+                                }
                             }
                             let player_position = self.objects[i].rect.center();
                             self.cam.x = player_position.x - self.screen.x/2.0;
                             self.cam.y = player_position.y - self.screen.y/2.0;
                         }
-                        ObjectType::Enemy => {
+                        Controller::AI => {
                             if self.slide_x(i, self.speed * self.objects[i].ai_direction) {
                                 self.objects[i].ai_direction *= -1.0;
                             }
@@ -398,6 +489,25 @@ impl VectorGraphics {
                             }
                         }
                         _ => {}
+                    }
+                    for i in 0..self.objects.len(){
+                        match self.objects[i].controller{
+                            Controller::FollowTarget => { 
+                                let new_center = self.objects[self.objects[i].target].rect.center();
+                                self.objects[i].rect.x = new_center.x - self.objects[i].rect.width / 2.0;
+                                self.objects[i].rect.y = new_center.y - self.objects[i].rect.height / 2.0;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if self.objects[i].frames_left_to_fire > 0{
+                        self.objects[i].frames_left_to_fire -= 1;
+                    }
+                    if self.objects[i].recently_damaged > 0{
+                        self.objects[i].recently_damaged -= 1;
+                    }
+                    if self.objects[i].destroying && self.objects[i].destroying_in_frames>0 {
+                        self.objects[i].destroying_in_frames -= 1;
                     }
                 }
             }
@@ -418,22 +528,44 @@ impl VectorGraphics {
             
         }
         for object in &self.objects{
-            let color = match object.object_type {
-                ObjectType::Block => (0.025,0.025,0.025),
-                ObjectType::Player => (1.0, 0.5, 0.0),
-                ObjectType::Enemy => (1.0, 0.0, 0.0),
-                ObjectType::PortalIn => (0.2, 1.0, 0.2),
-                ObjectType::PortalOut => (0.2, 0.2, 1.0),
-            };
             mesh.add_rect(
                 object.rect.x - self.cam.x, 
                 object.rect.y - self.cam.y, 
                 object.rect.width, 
                 object.rect.height, 
-                color.0, 
-                color.1, 
-                color.2);
+                object.color.r, 
+                object.color.g, 
+                object.color.b);
         }
+        for object in &self.objects {
+            if object.recently_damaged > 0 {
+                mesh.add_rect(
+                    object.rect.x - self.cam.x, 
+                    object.rect.y - self.cam.y - object.rect.height/2.0 - 20.0, 
+                    object.rect.width * (object.health as f32 / object.max_health as f32), 
+                    10.0, 
+                    0.0, 
+                    1.0, 
+                    0.0)
+            }
+        }
+
+        {
+            let mut i = 0;
+            while i < self.objects.len(){
+                if self.objects[i].destroying && self.objects[i].destroying_in_frames == 0{
+                    self.objects.remove(i);
+                    for ii in 0..self.objects.len(){
+                        if self.objects[ii].target > i{
+                            self.objects[ii].target -= 1;
+                        }
+                    }
+                }
+                i+=1;
+            }
+        }
+        
+
         mesh.update_queue(queue);
     }
 }
