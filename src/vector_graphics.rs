@@ -44,7 +44,7 @@ pub struct Vector2{
     pub y:f32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Copy)]
 struct Rect{
     x:f32,
     y:f32,
@@ -53,9 +53,9 @@ struct Rect{
 }
 
 impl Rect{
-    fn expand(&self, radius:f32) -> Rect{
+    /*fn expand(&self, radius:f32) -> Rect{
         Rect { x: self.x-radius, y: self.y-radius, width: self.width+radius*2.0, height: self.height+radius*2.0 }
-    }
+    }*/
 
     fn contains(&self, point:Vector2) -> bool{
         point.x > self.x && point.y > self.y && point.x < self.x+self.width && point.y< self.y+self.height
@@ -87,7 +87,7 @@ struct Object{
     color:Color,
     velocity:Vector2,
     gravity:f32,
-    ai_direction:f32,
+    direction:Vector2,
     collision_type:CollisionType,
     destroying:bool,
     destroy_at_frame:usize,
@@ -241,6 +241,7 @@ impl VectorGraphics {
                             Some(id) => {
                                 self.objects[id].faction = FACTION_PLAYER;
                                 self.objects[id].controller = Controller::Player;
+                                self.objects[id].direction = Vector2 { x:1.0, y:0.0 };
                                 self.objects[id].color = Color { r:1.0, g:0.5, b:0.0 };
                                 self.objects[id].gravity = 0.3;
                             }
@@ -254,7 +255,7 @@ impl VectorGraphics {
                                 self.objects[id].controller = Controller::AI;
                                 self.objects[id].color = Color { r:1.0, g:0.0, b:0.0 };
                                 self.objects[id].gravity = 0.3;
-                                self.objects[id].ai_direction = -1.0;
+                                self.objects[id].direction = Vector2{ x:-1.0, y:0.0 };
                                 self.objects[id].health = 20;
                                 self.objects[id].max_health = 20;
                             }
@@ -319,8 +320,8 @@ impl VectorGraphics {
                         rect: rect, 
                         color: Color { r: 0.025, g: 0.025, b: 0.025 },
                         gravity: 0.0,
-                        velocity: Vector2{x:0.0, y:0.0}, 
-                        ai_direction: 0.0,
+                        velocity: Vector2 { x: 0.0, y: 0.0 }, 
+                        direction: Vector2 { x: 0.0, y: 0.0 },
                         collision_type: CollisionType::Bounce,
                         destroying: false,
                         destroy_at_frame: 0,
@@ -447,25 +448,42 @@ impl VectorGraphics {
                     let grounded = self.slide_y(i, vy) && vy >= 0.0;
                     match self.objects[i].controller {
                         Controller::Player => {
-                            if self.left_arrow{
-                                self.slide_x(i, -self.speed);
+                            if !(self.up_arrow && self.down_arrow){
+                                if self.up_arrow{
+                                    self.objects[i].direction = Vector2{ x:0.0, y:-1.0 };
+                                    if grounded { 
+                                        self.objects[i].velocity.y -= self.jump_force;
+                                    }
+                                }
+                                if self.down_arrow{
+                                    self.objects[i].direction = Vector2{ x:0.0, y:1.0 };
+                                }
                             }
-                            if self.right_arrow{
-                                self.slide_x(i, self.speed);
+                            if !(self.left_arrow && self.right_arrow){
+                                if self.left_arrow{
+                                    self.slide_x(i, -self.speed);
+                                    self.objects[i].direction = Vector2{ x:-1.0, y:0.0 };
+                                }
+                                if self.right_arrow{
+                                    self.slide_x(i, self.speed);
+                                    self.objects[i].direction = Vector2{ x:1.0, y:0.0 };
+                                }
                             }
-                            if self.up_arrow && grounded{ 
-                                self.objects[i].velocity.y -= self.jump_force;
-                            }
+                            
                             if self.space {
                                 if self.objects[i].enable_firing_at_frame <= self.frame{
                                     self.objects[i].enable_firing_at_frame = self.frame+30;
+
                                     self.objects.push(Object { 
                                         controller: Controller::FollowTarget, 
-                                        rect: self.objects[i].rect.expand(75.0), 
+                                        rect: self.objects[i].rect.clone(), 
                                         color: Color { r: 1.0, g: 1.0, b: 0.2 }, 
                                         velocity: Vector2 { x: 0.0, y: 0.0 }, 
                                         gravity: 0.0, 
-                                        ai_direction: 0.0, 
+                                        direction: Vector2 { 
+                                            x: self.objects[i].direction.x*self.objects[i].rect.width, 
+                                            y: self.objects[i].direction.y*self.objects[i].rect.height, 
+                                        }, 
                                         collision_type: CollisionType::None, 
                                         destroying: true, 
                                         destroy_at_frame: self.frame+20, 
@@ -484,8 +502,8 @@ impl VectorGraphics {
                             self.cam.y = player_position.y - self.screen.y/2.0;
                         }
                         Controller::AI => {
-                            if self.slide_x(i, self.speed * self.objects[i].ai_direction) {
-                                self.objects[i].ai_direction *= -1.0;
+                            if self.slide_x(i, self.speed * self.objects[i].direction.x) {
+                                self.objects[i].direction.x *= -1.0;
                             }
                             if grounded {
                                 self.objects[i].velocity.y -= self.jump_force;
@@ -497,8 +515,8 @@ impl VectorGraphics {
                         match self.objects[i].controller{
                             Controller::FollowTarget => { 
                                 let new_center = self.objects[self.objects[i].target].rect.center();
-                                self.objects[i].rect.x = new_center.x - self.objects[i].rect.width / 2.0;
-                                self.objects[i].rect.y = new_center.y - self.objects[i].rect.height / 2.0;
+                                self.objects[i].rect.x = new_center.x - self.objects[i].rect.width / 2.0 + self.objects[i].direction.x;
+                                self.objects[i].rect.y = new_center.y - self.objects[i].rect.height / 2.0 + self.objects[i].direction.y;
                             }
                             _ => {}
                         }
