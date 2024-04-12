@@ -90,13 +90,13 @@ struct Object{
     ai_direction:f32,
     collision_type:CollisionType,
     destroying:bool,
-    destroying_in_frames:u32,
-    frames_left_to_fire:u32,
+    destroy_at_frame:usize,
+    enable_firing_at_frame:usize,
     target:usize,
     health:i32,
     max_health:i32,
     damage:i32,
-    recently_damaged:u32,
+    disable_damage_bar_at_frame:usize,
 }
 
 pub struct VectorGraphics {
@@ -115,6 +115,7 @@ pub struct VectorGraphics {
     last_portal_in:usize,
     cam:Vector2,
     screen:Vector2,
+    frame:usize,
 }
 
 impl VectorGraphics {
@@ -174,6 +175,7 @@ impl VectorGraphics {
             last_portal_in:0,
             cam:Vector2{x:0.0, y:0.0},
             screen:Vector2{x:0.0, y:0.0},
+            frame:0,
          };
     }
 
@@ -219,7 +221,7 @@ impl VectorGraphics {
                         match self.find_object_at_point(self.get_relative_mouse_position()){
                             Some(id) => {
                                 self.objects[id].destroying = true;
-                                self.objects[id].destroying_in_frames = 0;
+                                self.objects[id].destroy_at_frame = self.frame;
                             }
                             _ => {}
                         }
@@ -321,14 +323,14 @@ impl VectorGraphics {
                         ai_direction: 0.0,
                         collision_type: CollisionType::Bounce,
                         destroying: false,
-                        destroying_in_frames: 0,
-                        frames_left_to_fire: 0,
+                        destroy_at_frame: 0,
+                        enable_firing_at_frame: 0,
                         target:0,
                         faction:FACTION_PLAYER,
                         health:0,
                         max_health:0,
                         damage:0,
-                        recently_damaged:0,
+                        disable_damage_bar_at_frame:0,
                     });
                 }
             }
@@ -350,11 +352,11 @@ impl VectorGraphics {
         if self.objects[id].faction != self.objects[other_id].faction && self.objects[id].max_health>0 && self.objects[other_id].damage != 0{
             self.objects[id].health -= self.objects[other_id].damage;
             self.objects[other_id].damage = 0;
-            self.objects[id].recently_damaged = 120;
+            self.objects[id].disable_damage_bar_at_frame = self.frame+120;
             if self.objects[id].health <= 0{
                 self.objects[id].health = 0;
                 self.objects[id].destroying = true;
-                self.objects[id].destroying_in_frames = 0;
+                self.objects[id].destroy_at_frame = self.frame;
             }
         }
     }
@@ -455,8 +457,8 @@ impl VectorGraphics {
                                 self.objects[i].velocity.y -= self.jump_force;
                             }
                             if self.space {
-                                if self.objects[i].frames_left_to_fire == 0{
-                                    self.objects[i].frames_left_to_fire = 30;
+                                if self.objects[i].enable_firing_at_frame <= self.frame{
+                                    self.objects[i].enable_firing_at_frame = self.frame+30;
                                     self.objects.push(Object { 
                                         controller: Controller::FollowTarget, 
                                         rect: self.objects[i].rect.expand(75.0), 
@@ -465,14 +467,15 @@ impl VectorGraphics {
                                         gravity: 0.0, 
                                         ai_direction: 0.0, 
                                         collision_type: CollisionType::None, 
-                                        destroying: true, destroying_in_frames: 20, 
-                                        frames_left_to_fire: 0,
+                                        destroying: true, 
+                                        destroy_at_frame: self.frame+20, 
+                                        enable_firing_at_frame: 0,
                                         target: i,
                                         faction: self.objects[i].faction,
                                         health: 0,
                                         max_health: 0,
                                         damage: 5,
-                                        recently_damaged:0,
+                                        disable_damage_bar_at_frame:0,
                                      });
                                 }
                             }
@@ -499,15 +502,6 @@ impl VectorGraphics {
                             }
                             _ => {}
                         }
-                    }
-                    if self.objects[i].frames_left_to_fire > 0{
-                        self.objects[i].frames_left_to_fire -= 1;
-                    }
-                    if self.objects[i].recently_damaged > 0{
-                        self.objects[i].recently_damaged -= 1;
-                    }
-                    if self.objects[i].destroying && self.objects[i].destroying_in_frames>0 {
-                        self.objects[i].destroying_in_frames -= 1;
                     }
                 }
             }
@@ -538,7 +532,7 @@ impl VectorGraphics {
                 object.color.b);
         }
         for object in &self.objects {
-            if object.recently_damaged > 0 {
+            if object.disable_damage_bar_at_frame > self.frame {
                 mesh.add_rect(
                     object.rect.x - self.cam.x, 
                     object.rect.y - self.cam.y - object.rect.height/2.0 - 20.0, 
@@ -553,7 +547,7 @@ impl VectorGraphics {
         {
             let mut i = 0;
             while i < self.objects.len(){
-                if self.objects[i].destroying && self.objects[i].destroying_in_frames == 0{
+                if self.objects[i].destroying && self.objects[i].destroy_at_frame <= self.frame {
                     self.objects.remove(i);
                     for ii in 0..self.objects.len(){
                         if self.objects[ii].target > i{
@@ -567,5 +561,6 @@ impl VectorGraphics {
         
 
         mesh.update_queue(queue);
+        self.frame+=1;
     }
 }
