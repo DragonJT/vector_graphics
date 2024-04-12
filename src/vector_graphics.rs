@@ -44,6 +44,24 @@ pub struct Vector2{
     pub y:f32,
 }
 
+impl Vector2{
+    fn magnitude(&self) -> f32{
+        (self.x*self.x + self.y*self.y).sqrt()
+    }
+
+    fn normalize(&self) -> Vector2{
+        let magnitude = self.magnitude();
+        if magnitude == 0.0{
+            return Vector2 { x:0.0, y:0.0 };
+        }
+        Vector2 { x: self.x/magnitude, y: self.y/magnitude }
+    }
+
+    fn scale(&self, scale_x:f32, scale_y:f32) -> Vector2{
+        Vector2 { x: self.x*scale_x, y: self.y*scale_y }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct Rect{
     x:f32,
@@ -99,6 +117,30 @@ struct Object{
     disable_damage_bar_at_frame:usize,
 }
 
+struct Input{
+    keys:Vec<winit::keyboard::KeyCode>,
+}
+
+impl Input{
+    fn new() -> Self{
+        Input { keys: Vec::new() }
+    }
+
+    fn is_pressed(&self, key:&winit::keyboard::KeyCode) -> bool{
+        self.keys.contains(key)
+    }
+
+    fn press(&mut self, key:winit::keyboard::KeyCode){
+        if !self.keys.contains(&key){
+            self.keys.push(key);
+        }
+    }
+
+    fn release(&mut self, key:&winit::keyboard::KeyCode){
+        self.keys.retain(|k| k!=key);
+    }
+}
+
 pub struct VectorGraphics {
     objects:Vec<Object>,
     drag:Drag,
@@ -107,19 +149,14 @@ pub struct VectorGraphics {
     speed:f32,
     editor_speed:f32,
     jump_force:f32,
-    left_arrow:bool,
-    right_arrow:bool,
-    down_arrow:bool,
-    up_arrow:bool,
-    space:bool,
     last_portal_in:usize,
     cam:Vector2,
     screen:Vector2,
     frame:usize,
+    input:Input,
 }
 
 impl VectorGraphics {
-
     fn save(&self){
         let serialized = serde_json::to_string(&self.objects).unwrap();
         let mut file = File::create("save.txt").unwrap();
@@ -167,11 +204,7 @@ impl VectorGraphics {
             speed:5.0,
             editor_speed:7.5,
             jump_force: 14.0,
-            left_arrow:false,
-            right_arrow:false,
-            up_arrow:false,
-            down_arrow:false,
-            space:false,
+            input:Input::new(),
             last_portal_in:0,
             cam:Vector2{x:0.0, y:0.0},
             screen:Vector2{x:0.0, y:0.0},
@@ -198,14 +231,7 @@ impl VectorGraphics {
     }
 
     pub fn keydown(&mut self, key:winit::keyboard::KeyCode){
-        match key {
-            winit::keyboard::KeyCode::ArrowLeft=>{ self.left_arrow = true }
-            winit::keyboard::KeyCode::ArrowRight=>{ self.right_arrow = true } 
-            winit::keyboard::KeyCode::ArrowUp=>{ self.up_arrow = true }
-            winit::keyboard::KeyCode::ArrowDown=>{ self.down_arrow = true }
-            winit::keyboard::KeyCode::Space=>{ self.space = true }
-            _ => {}
-        }
+        self.input.press(key);
         match  self.mode {
             Mode::Play => {
                 match key {
@@ -241,7 +267,6 @@ impl VectorGraphics {
                             Some(id) => {
                                 self.objects[id].faction = FACTION_PLAYER;
                                 self.objects[id].controller = Controller::Player;
-                                self.objects[id].direction = Vector2 { x:1.0, y:0.0 };
                                 self.objects[id].color = Color { r:1.0, g:0.5, b:0.0 };
                                 self.objects[id].gravity = 0.3;
                             }
@@ -299,12 +324,8 @@ impl VectorGraphics {
     }
 
     pub fn keyup(&mut self, key:winit::keyboard::KeyCode){
+        self.input.release(&key);
         match key{
-            winit::keyboard::KeyCode::ArrowLeft=>{ self.left_arrow = false }
-            winit::keyboard::KeyCode::ArrowRight=>{ self.right_arrow = false } 
-            winit::keyboard::KeyCode::ArrowUp=>{ self.up_arrow = false }
-            winit::keyboard::KeyCode::ArrowDown=>{ self.down_arrow = false }
-            winit::keyboard::KeyCode::Space=>{ self.space = false }
             winit::keyboard::KeyCode::KeyR=>{
                 if self.drag.dragging{
                     self.drag.dragging = false;
@@ -448,42 +469,34 @@ impl VectorGraphics {
                     let grounded = self.slide_y(i, vy) && vy >= 0.0;
                     match self.objects[i].controller {
                         Controller::Player => {
-                            if !(self.up_arrow && self.down_arrow){
-                                if self.up_arrow{
-                                    self.objects[i].direction = Vector2{ x:0.0, y:-1.0 };
-                                    if grounded { 
-                                        self.objects[i].velocity.y -= self.jump_force;
-                                    }
-                                }
-                                if self.down_arrow{
-                                    self.objects[i].direction = Vector2{ x:0.0, y:1.0 };
+                            if self.input.is_pressed(&winit::keyboard::KeyCode::KeyW){
+                                if grounded { 
+                                    self.objects[i].velocity.y -= self.jump_force;
                                 }
                             }
-                            if !(self.left_arrow && self.right_arrow){
-                                if self.left_arrow{
+                            if !(self.input.is_pressed(&winit::keyboard::KeyCode::KeyA) && self.input.is_pressed(&winit::keyboard::KeyCode::KeyD)){
+                                if self.input.is_pressed(&winit::keyboard::KeyCode::KeyA){
                                     self.slide_x(i, -self.speed);
-                                    self.objects[i].direction = Vector2{ x:-1.0, y:0.0 };
                                 }
-                                if self.right_arrow{
+                                if self.input.is_pressed(&winit::keyboard::KeyCode::KeyD){
                                     self.slide_x(i, self.speed);
-                                    self.objects[i].direction = Vector2{ x:1.0, y:0.0 };
                                 }
                             }
                             
-                            if self.space {
+                            if self.input.is_pressed(&winit::keyboard::KeyCode::Space) {
                                 if self.objects[i].enable_firing_at_frame <= self.frame{
                                     self.objects[i].enable_firing_at_frame = self.frame+30;
-
+                                    let center = self.objects[i].rect.center();
+                                    let mousepos = self.get_relative_mouse_position();
+                                    let offset_to_mouse = Vector2 { x:mousepos.x - center.x, y:mousepos.y - center.y };
+                                    let direction = offset_to_mouse.normalize().scale(self.objects[i].rect.width, self.objects[i].rect.height);
                                     self.objects.push(Object { 
                                         controller: Controller::FollowTarget, 
                                         rect: self.objects[i].rect.clone(), 
                                         color: Color { r: 1.0, g: 1.0, b: 0.2 }, 
                                         velocity: Vector2 { x: 0.0, y: 0.0 }, 
                                         gravity: 0.0, 
-                                        direction: Vector2 { 
-                                            x: self.objects[i].direction.x*self.objects[i].rect.width, 
-                                            y: self.objects[i].direction.y*self.objects[i].rect.height, 
-                                        }, 
+                                        direction, 
                                         collision_type: CollisionType::None, 
                                         destroying: true, 
                                         destroy_at_frame: self.frame+20, 
@@ -524,16 +537,16 @@ impl VectorGraphics {
                 }
             }
             Mode::Edit => {
-                if self.left_arrow {
+                if self.input.is_pressed(&winit::keyboard::KeyCode::ArrowLeft) {
                     self.cam.x -= self.editor_speed;
                 }
-                if self.right_arrow {
+                if self.input.is_pressed(&winit::keyboard::KeyCode::ArrowRight) {
                     self.cam.x += self.editor_speed;
                 }
-                if self.up_arrow {
+                if self.input.is_pressed(&winit::keyboard::KeyCode::ArrowUp) {
                     self.cam.y -= self.editor_speed;
                 }
-                if self.down_arrow {
+                if self.input.is_pressed(&winit::keyboard::KeyCode::ArrowDown) {
                     self.cam.y += self.editor_speed;
                 }
             }
